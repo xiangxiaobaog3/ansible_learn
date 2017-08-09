@@ -2,26 +2,38 @@
 
 
 import paramiko
+import os
+import json
+import multiprocessing
 
 DEFAULT_HOST_LIST = '~/.ansible_hosts'
 DEFAULT_MODULE_PATH = '~/.ansible'
-DEFAULT_MODULE_NAME = 'df'
+DEFAULT_MODULE_NAME = 'ping'
 DEFAULT_MODULE_ARGS = ''
 
 
 
 class Runner(object):
-	def __init__(self, module_path=None,
-				 module_name=None, module_args='',
-				 host_list=[]):
-		self.host_list = host_list
+	def __init__(self, module_path=DEFAULT_MODULE_PATH,
+				 module_name=DEFAULT_MODULE_NAME, module_args='',
+				 host_list=DEFAULT_HOST_LIST,):
+
 		self.module_path = module_path
 		self.module_name = module_name
 		# self.forks = forks
 		# self.pattern = pattern
 		self.module_args = module_args
 		# self.timeout = timeout
+		self.host_list = self._parse_hosts(host_list)
 
+
+	def _parse_hosts(self, host_list):
+		''' parse the host inventory file if not sent as an array '''
+		if type(host_list) != list:
+			host_list = os.path.expanduser(host_list)
+			return file(host_list).read().split("\n")
+		return host_list
+	
 	
 	def _connect(self, host):
 		private_key = paramiko.RSAKey.from_private_key_file('/Users/xiangxiaobao/.ssh/qcloud_rsa')
@@ -38,17 +50,42 @@ class Runner(object):
 		conn = self._connect(host)
 		if not conn:
 			return [ host, None ]
+		
+		if self.module_name != "copy":
+			outpath = self._copy_module(conn)
+			self._exec_command(conn, "chmod +x %s" % outpath)
+			cmd = self._command(outpath)
+			result = self._exec_command(conn, cmd)
+			conn.close()
+			return json.loads(result)
 
-		cmd = self.module_name
-		result = self._exec_command(conn, cmd)
-		return result
-
+	
+	def _command(self, outpath):
+		cmd = "%s %s" % (outpath, " ".join(self.module_args))
+		return cmd
+	
 	
 	def _exec_command(self, conn, cmd):
 		stdin, stdout, stdderr = conn.exec_command(cmd)
 		result = stdout.read()
 		return result
+
+
+	def _copy_module(self, conn):
+		in_path = os.path.expanduser(
+			os.path.join(self.module_path, self.module_name)
+		)
 		
+		out_path = os.path.join(
+			"/var/spool/",
+			"ansible_learn_%s" % self.module_name
+		)
+		
+		sftp = conn.open_sftp()
+		sftp.put(in_path, out_path)
+		sftp.close()
+		return out_path
+	
 	
 	def run(self):
 		for host in self.host_list:
@@ -57,9 +94,8 @@ class Runner(object):
 	
 if __name__ == '__main__':
 	r = Runner(
-		host_list= ['118.89.234.40'],
-		module_path = '~/ansible',
-		module_name = 'df',
+		host_list= DEFAULT_HOST_LIST,
+		module_name = 'ping',
 		module_args = '',
 	)
 	
