@@ -5,23 +5,30 @@ import paramiko
 import os
 import json
 import multiprocessing
+import fnmatch
 
 DEFAULT_HOST_LIST = '~/.ansible_hosts'
 DEFAULT_MODULE_PATH = '~/.ansible'
 DEFAULT_MODULE_NAME = 'ping'
 DEFAULT_MODULE_ARGS = ''
+DEFAULT_PATTERN = '*'
 
+
+def _executor_hook(x):
+	(runner, host) = x
+	return runner._executor(host)
 
 
 class Runner(object):
 	def __init__(self, module_path=DEFAULT_MODULE_PATH,
 				 module_name=DEFAULT_MODULE_NAME, module_args='',
-				 host_list=DEFAULT_HOST_LIST,):
+				 host_list=DEFAULT_HOST_LIST,
+				 pattern=DEFAULT_PATTERN,):
 
 		self.module_path = module_path
 		self.module_name = module_name
 		# self.forks = forks
-		# self.pattern = pattern
+		self.pattern = pattern
 		self.module_args = module_args
 		# self.timeout = timeout
 		self.host_list = self._parse_hosts(host_list)
@@ -33,6 +40,14 @@ class Runner(object):
 			host_list = os.path.expanduser(host_list)
 			return file(host_list).read().split("\n")
 		return host_list
+	
+	def _matches(self, host_name):
+		''' returns if a hostname is matched by the pattern '''
+		if host_name == '':
+			return False
+		if fnmatch.fnmatch(host_name, self.pattern):
+			return True
+		return False
 	
 	
 	def _connect(self, host):
@@ -88,8 +103,13 @@ class Runner(object):
 	
 	
 	def run(self):
-		for host in self.host_list:
-			return self._executor(host)
+		hosts = [ x for x in self.host_list if self._matches(x)]
+		print hosts
+		pool = multiprocessing.Pool(3)
+		hosts = [ (self, x) for x in hosts ]
+		# print hosts
+		results = pool.map(_executor_hook, hosts)
+		return results
 	
 	
 if __name__ == '__main__':
