@@ -1,0 +1,26 @@
+# coding:utf-8
+
+from optparse import OptionParser
+
+
+DEFAULT_HOST_LIST = '~/.ansible_hosts'
+DEFAULT_MODULE_PATH = '~/.ansible'
+DEFAULT_MODULE_NAME = 'ping'
+DEFAULT_MODULE_ARGS = ''
+DEFAULT_PATTERN = '*'
+DEFAULT_REMOTE_USER = 'root'
+
+class Cli():
+
+    def __init__(self):
+        pass
+
+
+    def runner(self):
+        parser = OptionParser()
+        parser.add_option("-H", "--host-list", dest="host_list",
+            help="path to hosts list", default=DEFAULT_HOST_LIST)
+        parser.add_option("-L", "--library", dest="module_path",
+            help="path to module library", default=DEFAULT_MODULE_PATH)
+
+        options, args = parser.parse_args()

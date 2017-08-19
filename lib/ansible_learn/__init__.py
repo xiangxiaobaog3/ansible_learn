@@ -40,6 +40,7 @@ class Runner(object):
 			host_list = os.path.expanduser(host_list)
 			return file(host_list).read().split("\n")
 		return host_list
+
 	
 	def _matches(self, host_name):
 		''' returns if a hostname is matched by the pattern '''
