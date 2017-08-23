@@ -37,6 +37,7 @@ class Runner(object):
         self.module_args = module_args
 
 
+    # 读取hosts文件
     def _parse_hosts(self, host_list):
         ''' parse the host inventory file if not sent as an array '''
         if type(host_list) != list:
@@ -45,6 +46,7 @@ class Runner(object):
         return host_list
 
 
+    # 匹配数据函数
     def _matches(self, host_name):
         ''' returns if a hostname is matched by the pattern '''
         if host_name == '':
@@ -53,7 +55,8 @@ class Runner(object):
             return True
         return False
 	
-	
+
+    # 执行ssh秘钥连接
     def _connect(self, host):
         private_key = paramiko.RSAKey.from_private_key_file('/Users/xiangxiaobao/.ssh/qcloud_rsa')
         ssh = paramiko.SSHClient()
@@ -65,6 +68,7 @@ class Runner(object):
             return None
 
 
+    # 执行下面的命令的集合
     def _executor(self, host):
         conn = self._connect(host)
         if not conn:
@@ -78,18 +82,21 @@ class Runner(object):
             conn.close()
             return json.loads(result)
 
-	
+
+    # 输出参数
     def _command(self, outpath):
         cmd = "%s %s" % (outpath, " ".join(self.module_args))
         return cmd
 
 
+    # 命令输出
     def _exec_command(self, conn, cmd):
         stdin, stdout, stdderr = conn.exec_command(cmd)
         result = stdout.read()
         return result
 
 
+    # copy模块到远端
     def _copy_module(self, conn):
         in_path = os.path.expanduser(
             os.path.join(self.module_path, self.module_name)

@@ -12,6 +12,8 @@ DEFAULT_MODULE_ARGS = ''
 DEFAULT_PATTERN = '*'
 DEFAULT_REMOTE_USER = 'root'
 
+
+# 执行文件参数设置
 class Cli(object):
 
     def __init__(self):
