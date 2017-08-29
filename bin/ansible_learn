@@ -30,7 +30,7 @@ class Cli(object):
             help="hostname pattern", default=C.DEFAULT_PATTERN)
         parser.add_option("-a", "--args", dest="module_args",
             help="module arguments", default=C.DEFAULT_MODULE_ARGS)
-        parser.add_option("-r", "--run-playbook", dest="palybook",
+        parser.add_option("-r", "--run-playbook", dest="playbook",
             help="playbook file, instead of -n and -a",default=None)
 
         options, args = parser.parse_args()
