@@ -5,8 +5,9 @@ import os
 import json
 import multiprocessing
 import fnmatch
-
+import traceback
 import constants as C
+
 
 def _executor_hook(x):
     ''' callback used by multiprocessing pool '''
@@ -47,11 +48,13 @@ class Runner(object):
 
 
     # 匹配数据函数
-    def _matches(self, host_name):
+    def _matches(self, host_name, pattern=None):
         ''' returns if a hostname is matched by the pattern '''
         if host_name == '':
             return False
-        if fnmatch.fnmatch(host_name, self.pattern):
+        if not pattern:
+            pattern = self.pattern
+        if fnmatch.fnmatch(host_name, pattern):
             return True
         return False
 
@@ -63,9 +66,43 @@ class Runner(object):
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
             ssh.connect(host, port=22, username=self.remote_user, pkey=private_key)
-            return ssh
+            return [ True, ssh]
         except:
-            return None
+            return [ False, traceback.format_exc()]
+
+
+    def _return_from_module(self, conn, host, result):
+        conn.close()
+        try:
+            return [ host, True, json.loads(result) ]
+        except:
+            return [ host, False, result ]
+
+
+    def _delete_remote_files(self, conn, files):
+        for filename in files:
+            self._exec_command(conn, "rm -f %s" % filename)
+
+
+    def _execute_normal_module(self, conn, host, result):
+        ''' transfer a module, set it executable, and run it '''
+
+        outpath = self._copy_module(conn)
+        self._exec_command(conn, "chmod +x %s" % outpath)
+        cmd = self._command(outpath)
+        result = self._exec_command(conn, cmd)
+        self._delete_remote_files(conn, outpath)
+        return self._return_from_module(conn, host, result)
+
+
+    def _execute_copy(self, conn, host):
+
+        self.remote_log(conn, 'COPY remote:%s local:%s' % (self.module_args[0], self.module_args[1]))
+        source = self.module_args[0]
+        dest = self.module_args[1]
+        tmp_dest = self._get_tmp_path(conn, dest.split("/")[-1])
+
+
 
 
     # 执行下面的命令的集合
@@ -94,6 +131,15 @@ class Runner(object):
         stdin, stdout, stdderr = conn.exec_command(cmd)
         result = stdout.read()
         return result
+
+
+    def remote_log(self, conn, msg):
+        stdin, stdout, stdderr = conn.exec_command('/usr/bin/logger -t ansible_learn -p auth.info %r' % msg)
+
+
+    def _get_tmp_path(self, conn, file_name):
+        output = self._exec_command(conn, "mktemp /tmp/%s.XXXXXX" % file_name)
+        return output.split("\n")[0]
 
 
     # copy模块到远端
