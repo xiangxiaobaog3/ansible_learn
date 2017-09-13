@@ -25,7 +25,7 @@ class Runner(object):
         remote_user=C.DEFAULT_REMOTE_USER,
         module_args=C.DEFAULT_MODULE_ARGS,
         timeout=C.DEFAULT_TIMEOUT,
-        fork=C.DEFAULT_FORKS):
+        forks=C.DEFAULT_FORKS):
 
 
         self.host_list = self._parse_hosts(host_list)
@@ -35,7 +35,7 @@ class Runner(object):
         self.pattern = pattern
         self.timeout = timeout
         self.module_args = module_args
-        self.fork = fork
+        self.forks = forks
 
 
     # 读取hosts文件
@@ -84,7 +84,7 @@ class Runner(object):
             self._exec_command(conn, "rm -f %s" % filename)
 
 
-    def _execute_normal_module(self, conn, host, result):
+    def _execute_normal_module(self, conn, host):
         ''' transfer a module, set it executable, and run it '''
 
         outpath = self._copy_module(conn)
@@ -96,28 +96,76 @@ class Runner(object):
 
 
     def _execute_copy(self, conn, host):
-
+        ''' transfer a file + copy module, run copy module, clean up '''
         self.remote_log(conn, 'COPY remote:%s local:%s' % (self.module_args[0], self.module_args[1]))
         source = self.module_args[0]
         dest = self.module_args[1]
         tmp_dest = self._get_tmp_path(conn, dest.split("/")[-1])
 
+        ftp = conn.open_sftp()
+        ftp.put(source, tmp_dest)
+        ftp.close()
+
+        # install the copy module
+
+        self.module_name = 'copy'
+        outpath = self._copy_module(conn)
+        self._exec_command(conn, "chmod +x %s" % outpath)
+
+        # run the copy module6
+
+        self.module_args = [ tmp_dest, dest ]
+        cmd = self._command(outpath)
+        result = self._exec_command(conn, cmd)
+        self._delete_remote_files(conn, [outpath, tmp_dest])
+
+        return self._return_from_module(conn, host, result)
 
 
+    def _execute_template(self, conn, host):
+        source = self.module_args[0]
+        dest = self.module_args[1]
+        metadata = '/var/spool/setup'
 
-    # 执行下面的命令的集合
+        # first copy the source template over
+        tempname = os.path.split(source)[-1]
+        temppath = self._get_tmp_path(conn, tempname)
+        self.remote_log(conn, 'COPY remote:%s local:%s' % (source, temppath))
+        ftp = conn.open_sftp()
+        ftp.put(source, temppath)
+        ftp.close()
+
+        # install the template module
+        self.module_name = 'template'
+        outpath = self._copy_module(conn)
+        self._exec_command(conn, "chmod +x %s" % outpath)
+
+        # run the template module
+        self.module_args = [ temppath, dest, metadata ]
+        result = self._exec_command(conn, self._command(outpath))
+        # clean up
+        self._delete_remote_files(conn, [ outpath, temppath ])
+        return self._return_from_module(conn, host, result)
+
+
     def _executor(self, host):
-        conn = self._connect(host)
-        if not conn:
-            return [host, None]
-
-        if self.module_name != "copy":
-            outpath = self._copy_module(conn)
-            self._exec_command(conn, "chmod +x %s" % outpath)
-            cmd = self._command(outpath)
-            result = self._exec_command(conn, cmd)
-            conn.close()
-            return json.loads(result)
+        '''
+        callback executed in parallel for each host.
+        returns(hostname, connected_ok, extra)
+        where extra is the result of a successful connect
+        or a traceback string
+        '''
+        ok, conn = self._connect(host)
+        if not ok:
+            return [ host, False, conn ]
+        if self.module_name not in [ 'copy', 'templte' ]:
+            return self._execute_normal_module(conn, host)
+        elif self.module_name == 'copy':
+            return self._execute_copy(conn, host)
+        elif self.module_name == 'template':
+            return self._execute_template(conn, host)
+        else:
+            raise Exception("???")
 
 
     # 输出参数
@@ -126,15 +174,18 @@ class Runner(object):
         return cmd
 
 
-    # 命令输出
-    def _exec_command(self, conn, cmd):
-        stdin, stdout, stdderr = conn.exec_command(cmd)
-        result = stdout.read()
-        return result
-
-
     def remote_log(self, conn, msg):
         stdin, stdout, stdderr = conn.exec_command('/usr/bin/logger -t ansible_learn -p auth.info %r' % msg)
+
+
+    # 命令输出
+    def _exec_command(self, conn, cmd):
+        ''' execute a command over SSH '''
+        msg = '%s: %s' % (self.module_name, cmd)
+        self.remote_log(conn, msg)
+        stdin, stdout, stdderr = conn.exec_command(cmd)
+        result = "\n".join(stdout.readlines())
+        return result
 
 
     def _get_tmp_path(self, conn, file_name):
@@ -144,36 +195,61 @@ class Runner(object):
 
     # copy模块到远端
     def _copy_module(self, conn):
+        ''' transfer a moudle over SFTP '''
         in_path = os.path.expanduser(
             os.path.join(self.module_path, self.module_name)
         )
 
-        out_path = os.path.join(
-            "/var/spool/",
-            "ansible_learn_%s" % self.module_name
-        )
+        out_path = self._get_tmp_path(conn, "ansbile_%s" % self.module_name)
 
         sftp = conn.open_sftp()
         sftp.put(in_path, out_path)
         sftp.close()
         return out_path
 
+    def match_hosts(self, pattern=None):
+        ''' return all matched hosts '''
+        return [h for h in self.host_list if self._matches(h, pattern)]
+
+
 
     def run(self):
-        hosts = [ x for x in self.host_list if self._matches(x)]
-        print hosts
-        pool = multiprocessing.Pool()
-        hosts = [ (self, x) for x in hosts ]
-        # print hosts
-        results = pool.map(_executor_hook, hosts)
-        return results
+        ''' xfer & run module on all matched hosts '''
+
+        # find hosts that match the pattern
+        hosts = self.match_hosts()
+
+        # attack pool of hosts in N forks
+        hosts = [(self, x) for x in hosts]
+        if self.forks > 1:
+            pool = multiprocessing.Pool(self.forks)
+            results = pool.map(_executor_hook, hosts)
+        else:
+            results = [_executor_hook(x) for x in hosts]
+
+        # sort hosts by ones we successfully contacted
+        # and ones we did not
+        results2 = {
+            "contacted": {},
+            "dark": {}
+        }
+        print results
+        for x in results:
+            (host, is_ok, result) = x
+            if not is_ok:
+                results2["dark"][host] = result
+            else:
+                results2["contacted"][host] = result
+
+        return results2
 
 
 if __name__ == '__main__':
     r = Runner(
-        host_list= DEFAULT_HOST_LIST,
-        module_name = 'ping',
-        module_args = '',
+        module_name='ping',
+        module_args='',
+        pattern='*',
+        forks = 3
     )
 
     print r.run()
