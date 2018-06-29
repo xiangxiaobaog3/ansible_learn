@@ -47,9 +47,8 @@ class Runner(object):
         return host_list
 
 
-    # 匹配数据函数
     def _matches(self, host_name, pattern=None):
-        ''' returns if a hostname is matched by the pattern '''
+        ''' returns if a hostname is matched by the pattern 返回匹配规则的主机名'''
         if host_name == '':
             return False
         if not pattern:
@@ -61,7 +60,7 @@ class Runner(object):
 
     # 执行ssh秘钥连接
     def _connect(self, host):
-        private_key = paramiko.RSAKey.from_private_key_file('/Users/xiangxiaobao/.ssh/qcloud_rsa')
+        private_key = paramiko.RSAKey.from_private_key_file('/Users/xiangxiaobao/.ssh/id_rsa')
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         try:
@@ -207,21 +206,24 @@ class Runner(object):
         sftp.close()
         return out_path
 
+
     def match_hosts(self, pattern=None):
-        ''' return all matched hosts '''
+        ''' return all matched hosts 返回所有匹配的IP地址'''
         return [h for h in self.host_list if self._matches(h, pattern)]
 
 
 
     def run(self):
-        ''' xfer & run module on all matched hosts '''
+        ''' xfer & run module on all matched hosts
+        为了多进程instancemethod 实例化函数，所以要把_executor_hook放在类外面然后调用回来
+        '''
 
-        # find hosts that match the pattern
         hosts = self.match_hosts()
 
         # attack pool of hosts in N forks
         hosts = [(self, x) for x in hosts]
-        if self.forks > 1:
+        print hosts
+        if self.forks > 5:
             pool = multiprocessing.Pool(self.forks)
             results = pool.map(_executor_hook, hosts)
         else:
@@ -233,6 +235,7 @@ class Runner(object):
             "contacted": {},
             "dark": {}
         }
+
         print results
         for x in results:
             (host, is_ok, result) = x
