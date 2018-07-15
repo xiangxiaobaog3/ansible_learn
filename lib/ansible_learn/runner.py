@@ -36,6 +36,7 @@ class Runner(object):
         self.timeout = timeout
         self.module_args = module_args
         self.forks = forks
+        self._tmp_paths = {}
 
 
     # 读取hosts文件
@@ -51,10 +52,10 @@ class Runner(object):
         ''' returns if a hostname is matched by the pattern 返回匹配规则的主机名'''
         if host_name == '':
             return False
-        if not pattern:
-            pattern = self.pattern
-        if fnmatch.fnmatch(host_name, pattern):
-            return True
+        subpatterns = pattern.split(";")
+        for subpattern in subpatterns:
+            if fnmatch.fnmatch(host_name, subpattern):
+                return True
         return False
 
 
@@ -79,19 +80,54 @@ class Runner(object):
 
 
     def _delete_remote_files(self, conn, files):
+        ''' deletes one or more remote files '''
         for filename in files:
             self._exec_command(conn, "rm -f %s" % filename)
 
+    def _transfer_file(self, conn, source, dest):
+        ''' transfers a remote file '''
+        self.remote_log(conn, 'COPY remote:%s local:%s' % (source, dest))
+        sftp = conn.open_sftp()
+        sftp.put(source, dest)
+        sftp.close()
 
-    def _execute_normal_module(self, conn, host):
-        ''' transfer a module, set it executable, and run it '''
 
+    def _transfer_moudle(self, conn):
+        '''
+        transfers a module file to the remote side to execute it,
+        but does not execute it yet
+        '''
         outpath = self._copy_module(conn)
         self._exec_command(conn, "chmod +x %s" % outpath)
+        return outpath
+
+
+    def _execute_module(self, conn, outpath):
+        '''
+        runs a module that has already been transferred
+        '''
         cmd = self._command(outpath)
         result = self._exec_command(conn, cmd)
-        self._delete_remote_files(conn, outpath)
+        # self._delete_remote_files(conn, [ outpath ])
+        return result
+
+
+    def _execute_normal_module(self, conn, host):
+        '''
+        transfer & execute a module that is not 'copy' or 'template'
+        because those require extra work.
+        '''
+        module = self._transfer_moudle(conn)
+        result = self._execute_module(conn, module)
         return self._return_from_module(conn, host, result)
+
+    def _parse_kv(self, args):
+        options = {}
+        for x in args:
+            if x.find("=") != -1:   # 不是很清楚为什么是 -1
+                k, v = x.split("=")
+                options[k] = v
+        return options
 
 
     def _execute_copy(self, conn, host):
@@ -187,9 +223,12 @@ class Runner(object):
         return result
 
 
-    def _get_tmp_path(self, conn, file_name):
-        output = self._exec_command(conn, "mktemp /tmp/%s.XXXXXX" % file_name)
-        return output.split("\n")[0]
+    def _get_tmp_path(self, conn):
+        if conn not in self._tmp_paths:
+            output = self._exec_command(conn, "mktemp -d /tmp/ansible.XXXXXX")
+            self._tmp_paths[conn] = output.split("\n")[0] + '/'
+
+        return self._tmp_paths[conn]
 
 
     # copy模块到远端
@@ -199,7 +238,7 @@ class Runner(object):
             os.path.join(self.module_path, self.module_name)
         )
 
-        out_path = self._get_tmp_path(conn, "ansbile_%s" % self.module_name)
+        out_path = self._get_tmp_path(conn) + self.module_name
 
         sftp = conn.open_sftp()
         sftp.put(in_path, out_path)
@@ -222,7 +261,6 @@ class Runner(object):
 
         # attack pool of hosts in N forks
         hosts = [(self, x) for x in hosts]
-        print hosts
         if self.forks > 5:
             pool = multiprocessing.Pool(self.forks)
             results = pool.map(_executor_hook, hosts)
@@ -236,7 +274,6 @@ class Runner(object):
             "dark": {}
         }
 
-        print results
         for x in results:
             (host, is_ok, result) = x
             if not is_ok:
